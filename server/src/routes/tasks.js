@@ -3,7 +3,8 @@ const { Task, Kpi, TASK_STATUSES, PRIORITIES } = require('../models');
 const { fail, visibleIds, manages, audit, escapeRegex, csv, notify } = require('../lib');
 
 const POP = [{ path: 'owner', select: 'name avatarColor avatarUrl role' }, { path: 'createdBy', select: 'name' }, { path: 'comments.author', select: 'name avatarColor avatarUrl' }, { path: 'history.by', select: 'name' }];
-const isOverdue = (t) => !!t.dueDate && new Date(t.dueDate) < new Date() && !['done', 'cancelled'].includes(t.status);
+const { pastDue } = require('../lib');
+const isOverdue = (t) => pastDue(t.dueDate) && !['done', 'cancelled'].includes(t.status);
 const shape = (t, me, canManage) => {
   const o = t.toObject ? t.toObject() : t;
   const mine = String(o.owner?._id || o.owner) === String(me._id);
@@ -31,7 +32,7 @@ async function buildFilter(req) {
   if (status && TASK_STATUSES.includes(status)) filter.status = status;
   if (priority && PRIORITIES.includes(priority)) filter.priority = priority;
   if (q) filter.title = { $regex: escapeRegex(String(q).slice(0, 80)), $options: 'i' };
-  if (overdue === '1') { filter.dueDate = { $lt: new Date() }; filter.status = { $nin: ['done', 'cancelled'] }; }
+  if (overdue === '1') { filter.dueDate = { $lt: new Date(Date.now() - 864e5 + 1) }; filter.status = { $nin: ['done', 'cancelled'] }; }
   return { filter, reports };
 }
 

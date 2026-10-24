@@ -56,6 +56,13 @@ The next three are optional modules (Settings, "What the app includes"):
 - **Profiles**: everyone can edit their own name, title, department, phone, bio and avatar colour, and change their password.
 - CSV export of tasks.
 
+## Live updates
+
+Open pages update by themselves: no refresh needed. Every few seconds (only while the tab is visible) the app asks
+`GET /api/sync` whether anything the person can see has changed. If it has, lists, dashboards, the team structure,
+notification counts and any open KPI reload quietly in place. A new notification also pops up in the corner, and the
+browser tab shows the unread count. This works the same on a normal server and on Vercel (no sockets needed).
+
 ## Run it locally
 
 You need Node 18+ and a MongoDB database (a free MongoDB Atlas cluster works, or a local MongoDB).

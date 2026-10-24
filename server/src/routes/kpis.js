@@ -1,6 +1,6 @@
 const router = require('express').Router();
-const { Kpi, User, TASK_STATUSES, PRIORITIES } = require('../models');
-const { fail, visibleIds, audit, notify, escapeRegex } = require('../lib');
+const { Kpi, User, Notification, TASK_STATUSES, PRIORITIES } = require('../models');
+const { fail, visibleIds, audit, notify, escapeRegex, dueEnd, pastDue } = require('../lib');
 
 const POP = [{ path: 'owner', select: 'name avatarColor avatarUrl role title department' }, { path: 'createdBy', select: 'name' }, { path: 'checkins.by', select: 'name' }];
 const num = (v, label) => { const n = Number(v); if (v === '' || v == null || !isFinite(n)) fail(400, `${label} must be a number.`); return n; };
@@ -21,13 +21,14 @@ function kpiHealth(k) {
   if (status === 'cancelled') health = 'cancelled';
   else if (status === 'done' || pct >= 100) health = 'achieved';
   else if (['delayed', 'blocked'].includes(status)) health = 'off_track';
-  else if (k.startDate && k.dueDate && k.dueDate > k.startDate) {
-    const expected = Math.max(0, Math.min(1, (Date.now() - k.startDate) / (k.dueDate - k.startDate))) * 100;
-    health = Date.now() > k.dueDate ? 'off_track' : expected < 5 || pct >= expected * 0.9 ? 'on_track' : pct >= expected * 0.6 ? 'at_risk' : 'off_track';
+  else if (k.startDate && k.dueDate && dueEnd(k.dueDate) > new Date(k.startDate)) {
+    const end = dueEnd(k.dueDate).getTime(), start = new Date(k.startDate).getTime();
+    const expected = Math.max(0, Math.min(1, (Date.now() - start) / (end - start))) * 100;
+    health = Date.now() > end ? 'off_track' : expected < 5 || pct >= expected * 0.9 ? 'on_track' : pct >= expected * 0.6 ? 'at_risk' : 'off_track';
   } else health = pct >= 70 ? 'on_track' : pct >= 40 ? 'at_risk' : 'off_track';
   return { pct, health, status };
 }
-const isOverdue = (k) => !!k.dueDate && new Date(k.dueDate) < new Date() && !['done', 'cancelled'].includes(kpiStatus(k));
+const isOverdue = (k) => pastDue(k.dueDate) && !['done', 'cancelled'].includes(kpiStatus(k));
 // Admin and CEO can set KPIs for anyone; managers for the people under them.
 const canManage = (user, reports, ownerId) => ['admin', 'ceo'].includes(user.role) || reports.includes(String(ownerId));
 const shape = (k, me, manage) => {
@@ -79,7 +80,7 @@ async function listKpis(req) {
   else if (scope === 'all') filter.owner = { $in: ids };
   else filter.owner = req.user._id;
   if (q) filter.name = { $regex: escapeRegex(String(q).slice(0, 80)), $options: 'i' };
-  let kpis = (await Kpi.find(filter).sort({ createdAt: -1 }).limit(1000).populate(POP)).map((k) => shape(k, req.user, canManage(req.user, reports, k.owner._id)));
+  let kpis = (await Kpi.find(filter).slice('checkins', req.fullHistory ? -200 : -12).sort({ createdAt: -1 }).limit(1000).populate(POP)).map((k) => shape(k, req.user, canManage(req.user, reports, k.owner._id)));
   if (status === 'overdue') kpis = kpis.filter((k) => k.overdue); else if (status && TASK_STATUSES.includes(status)) kpis = kpis.filter((k) => k.status === status);
   if (req.query.priority && PRIORITIES.includes(req.query.priority)) kpis = kpis.filter((k) => k.priority === req.query.priority);
   const rank = { urgent: 0, high: 1, medium: 2, low: 3 }; const closed = (k) => (['done', 'cancelled'].includes(k.status) ? 1 : 0);
@@ -98,6 +99,7 @@ const FILLS = { done: 'FFD9F2E3', achieved: 'FFD9F2E3', in_progress: 'FFDCE9FB',
 
 router.get('/export.xlsx', async (req, res) => {
   const ExcelJS = require('exceljs');
+  req.fullHistory = true;
   const kpis = await listKpis(req);
   const wb = new ExcelJS.Workbook();
   wb.creator = 'WorkTrack'; wb.created = new Date();
@@ -185,6 +187,8 @@ router.post('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const { kpi, manage, mine } = await findVisible(req, req.params.id);
   if (mine && kpi.unseen) { kpi.unseen = false; kpi.openedAt = new Date(); await kpi.save(); await audit(req, 'kpi.opened', kpi.name); }
+  // Opening the KPI also clears the notifications that point at it.
+  await Notification.updateMany({ user: req.user._id, read: false, link: '/kpis?open=' + kpi._id }, { read: true });
   await kpi.populate(POP);
   res.json({ kpi: shape(kpi, req.user, manage) });
 });
@@ -223,10 +227,13 @@ router.post('/:id/checkin', async (req, res) => {
   if (!mine && !manage) fail(403, 'You can view this KPI but not update it.');
   const b = req.body || {};
   if (kpi.mode !== 'percent' && b.status === undefined) num(b.value, 'Value');
+  const statusBefore = kpi.status;
   applyUpdate(kpi, b, req.user._id);
   await kpi.save();
   await audit(req, 'kpi.checkin', kpi.name, `${kpi.status.replace('_', ' ')}, ${kpiPct(kpi)}%`);
-  if (!mine) await notify(kpi.owner, `${req.user.name} updated your KPI`, `${kpi.name}: ${kpi.status.replace('_', ' ')}, ${kpiPct(kpi)}%`, '/kpis?open=' + kpi._id);
+  const summary = `${kpi.name}: ${kpi.status.replace('_', ' ')}, ${kpiPct(kpi)}%`;
+  if (!mine) await notify(kpi.owner, `${req.user.name} updated your KPI`, summary, '/kpis?open=' + kpi._id);
+  else if (statusBefore !== kpi.status && String(kpi.createdBy) !== String(req.user._id)) await notify(kpi.createdBy, `${req.user.name} updated a KPI you assigned`, summary, '/kpis?open=' + kpi._id);
   await kpi.populate(POP);
   res.json({ kpi: shape(kpi, req.user, manage) });
 });

@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api, qs } from '../api.js';
 import { useAuth } from '../App.jsx';
-import { HEALTH, PRIORITIES, ROLES, STATUS, STATUSES, cap, fmtDate, fmtDateTime, fmtShort, fmtVal, isManager } from '../meta.js';
+import { HEALTH, PRIORITIES, ROLES, STATUS, STATUSES, cap, fmtDate, fmtDateTime, fmtDue, fmtShort, fmtVal, isManager } from '../meta.js';
+import { useLiveTick } from '../live.js';
 import { Avatar, Empty, ErrorNote, Field, Loading, Modal, Sparkline, StatusPill, Tag, useLoad } from '../ui.jsx';
 
 export const UrgencyTag = ({ priority }) => <Tag tone={priority === 'urgent' ? 'bad' : priority === 'high' ? 'warn' : ''}>{priority === 'urgent' ? 'Urgent' : `${cap(priority)} urgency`}</Tag>;
@@ -13,6 +14,8 @@ export default function Kpis() {
   const [params, setParams] = useSearchParams();
   const [scope, setScope] = useState(everyone ? 'team' : 'mine');
   const [f, setF] = useState({ q: '', status: '', priority: '', owner: '' });
+  const [search, setSearch] = useState('');
+  useEffect(() => { const t = setTimeout(() => setF((x) => (x.q === search ? x : { ...x, q: search })), 250); return () => clearTimeout(t); }, [search]);
   const [modal, setModal] = useState(null);
   const { data, error, loading, reload } = useLoad(() => api.get('/kpis' + qs({ scope, ...f })), [scope, f.q, f.status, f.priority, f.owner]);
   const people = useLoad(() => (manager ? api.get('/users/tree') : Promise.resolve({ users: [] })), [manager]);
@@ -42,7 +45,7 @@ export default function Kpis() {
         {manager && <div className="seg-control" role="tablist">
           {[['mine', 'Mine'], ['team', everyone ? 'Everyone else' : 'My teams']].map(([k, l]) => <button key={k} role="tab" aria-selected={scope === k} className={scope === k ? 'on' : ''} onClick={() => { setScope(k); setF({ ...f, owner: '' }); }}>{l}</button>)}
         </div>}
-        <input type="search" placeholder="Search KPIs" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} aria-label="Search KPIs" />
+        <input type="search" placeholder="Search KPIs" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search KPIs" />
         <select value={f.status} onChange={(e) => setF({ ...f, status: e.target.value })} aria-label="Status"><option value="">Any status</option>{STATUSES.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}<option value="overdue">Past the deadline</option></select>
         <select value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })} aria-label="Urgency"><option value="">Any urgency</option>{PRIORITIES.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}</select>
         {scope === 'team' && <select value={f.owner} onChange={(e) => setF({ ...f, owner: e.target.value })} aria-label="Person"><option value="">Everyone</option>{others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>}
@@ -58,7 +61,7 @@ export default function Kpis() {
               <div className="kpi-num"><b>{k.pct}%</b><span>{k.mode === 'percent' ? 'complete' : `${fmtVal(k.current, k.unit)} of ${fmtVal(k.target, k.unit)}`}</span><Sparkline values={k.checkins.map((c) => c.value)} color={st.color} /></div>
               <div className="meter" role="img" aria-label={`${k.pct}% complete`}><span style={{ width: k.pct + '%', background: st.color }} /></div>
               <p className="kpi-tags"><UrgencyTag priority={k.priority} />{k.overdue ? <Tag tone="bad">Past deadline</Tag> : pace && <Tag tone={k.health === 'on_track' ? 'good' : k.health === 'at_risk' ? 'warn' : 'bad'}>{pace.label}</Tag>}</p>
-              <p className="muted small kpi-meta">{k.dueDate ? `Due ${fmtDate(k.dueDate)}. ` : ''}Updated {fmtShort(k.checkins.at(-1)?.at)}.{k.createdBy && String(k.createdBy._id) !== String(k.owner._id) ? ` Assigned by ${k.createdBy.name}.` : ''}</p>
+              <p className="muted small kpi-meta">{k.dueDate ? `Due ${fmtDue(k.dueDate)}. ` : ''}Updated {fmtShort(k.checkins.at(-1)?.at)}.{k.createdBy && String(k.createdBy._id) !== String(k.owner._id) ? ` Assigned by ${k.createdBy.name}.` : ''}</p>
               <div className="actions left">
                 <button className="btn btn-primary" onClick={() => setModal({ type: 'view', id: k.id })}>{k.canUpdate ? 'View and update' : 'View'}</button>
                 {k.canEdit && <><button className="btn btn-quiet" onClick={() => setModal({ type: 'form', kpi: k })}>Edit</button><button className="btn btn-quiet" onClick={() => remove(k)}>Delete</button></>}
@@ -76,15 +79,16 @@ function KpiForm({ kpi, people, canAssign, onClose, onDone }) {
   const selfOk = user.role !== 'ceo';
   const [f, setF] = useState(kpi ? { name: kpi.name, description: kpi.description || '', ownerId: kpi.owner._id, mode: kpi.mode, priority: kpi.priority, unit: kpi.mode === 'percent' ? '' : kpi.unit, baseline: kpi.baseline, target: kpi.target, dueDate: kpi.dueDate ? kpi.dueDate.slice(0, 10) : '' }
     : { name: '', description: '', mode: 'percent', priority: 'medium', unit: '', baseline: 0, target: '', dueDate: '' });
-  const [picked, setPicked] = useState(selfOk || !canAssign ? [user.id] : []);
-  const [choice, setChoice] = useState(''); const [error, setError] = useState('');
+  // Managers start with nobody picked, so a KPI can never silently land on themselves instead of the person they meant.
+  const [picked, setPicked] = useState(canAssign && people.length ? [] : [user.id]);
+  const [error, setError] = useState('');
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const left = people.filter((p) => !picked.includes(p.id));
   const nameOf = (id) => id === user.id ? 'Me' : people.find((p) => p.id === id)?.name || 'Unknown';
-  const addChoice = () => {
+  const addChoice = (choice) => {
     if (!choice) return;
     setPicked(choice === '__all' ? [...new Set([...picked, ...left.map((p) => p.id)])] : picked.includes(choice) ? picked : [...picked, choice]);
-    setChoice('');
+    setError('');
   };
   const submit = async (e) => {
     e.preventDefault(); setError('');
@@ -109,15 +113,14 @@ function KpiForm({ kpi, people, canAssign, onClose, onDone }) {
           <div className="field"><span>Assign to <em className="count">{picked.length} picked</em></span>
             {picked.length > 0 && <ul className="chips">{picked.map((id) => <li key={id} className="chip-x">{nameOf(id)}<button type="button" className="icon-btn" onClick={() => setPicked(picked.filter((x) => x !== id))} aria-label={'Remove ' + nameOf(id)}>×</button></li>)}</ul>}
             <div className="comment-form">
-              <select value={choice} onChange={(e) => setChoice(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && choice) { e.preventDefault(); addChoice(); } }} aria-label="Choose who to assign to" disabled={!left.length && !(selfOk && !picked.includes(user.id))}>
+              <select value="" onChange={(e) => addChoice(e.target.value)} aria-label="Choose who to assign to" disabled={!left.length && !(selfOk && !picked.includes(user.id))}>
                 <option value="">{left.length || (selfOk && !picked.includes(user.id)) ? 'Choose a person…' : 'Everyone is added'}</option>
                 {selfOk && !picked.includes(user.id) && <option value={user.id}>Me</option>}
                 {left.length > 1 && <option value="__all">Everyone listed ({left.length})</option>}
                 {left.map((p) => <option key={p.id} value={p.id}>{p.name}{p.title ? `, ${p.title}` : ''}</option>)}
               </select>
-              <button type="button" className="btn" onClick={addChoice} disabled={!choice}>Add</button>
             </div>
-            <small>Add as many people as you like and each one gets their own copy to update.</small></div>
+            <small>{picked.length ? 'Pick more people to add them. Each one gets their own copy to update.' : 'Pick who this KPI is for. Choose "Me" for your own KPI.'}</small></div>
         ))}
         {!kpi && <div className="field"><span>How progress is measured</span>
           <div className="seg-control" role="tablist">
@@ -131,7 +134,7 @@ function KpiForm({ kpi, people, canAssign, onClose, onDone }) {
           <Field label="Unit" hint="calls, hrs, ETB…"><input value={f.unit} onChange={set('unit')} maxLength={20} /></Field>
         </div>}
         <ErrorNote error={error} />
-        <div className="actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary">{kpi ? 'Save changes' : picked.length > 1 ? `Assign to ${picked.length} people` : 'Add KPI'}</button></div>
+        <div className="actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary">{kpi ? 'Save changes' : picked.length > 1 ? `Assign to ${picked.length} people` : picked.length === 1 && picked[0] !== user.id ? `Assign to ${nameOf(picked[0])}` : 'Add KPI'}</button></div>
       </form>
     </Modal>
   );
@@ -143,9 +146,12 @@ function KpiView({ id, onClose }) {
   const [status, setStatus] = useState(''); const [progress, setProgress] = useState(0); const [value, setValue] = useState(0); const [note, setNote] = useState(''); const [busy, setBusy] = useState(false);
   const adopt = (kpi) => { setK(kpi); setStatus(kpi.status); setProgress(kpi.pct); setValue(kpi.current); setNote(''); };
   useEffect(() => { setK(null); setError(''); api.get('/kpis/' + id).then((d) => adopt(d.kpi)).catch((e) => setError(e.message)); }, [id]);
+  const percent = k?.mode === 'percent';
+  const dirty = !!k && (status !== k.status || note.trim() !== '' || (percent ? Number(progress) !== k.pct : Number(value) !== k.current));
+  // Someone else changed this KPI while it is open: show it, unless the person is in the middle of an update.
+  const tick = useLiveTick();
+  useEffect(() => { if (!tick || !k || dirty || busy) return; api.get('/kpis/' + id).then((d) => adopt(d.kpi)).catch((e) => setError(e.message)); }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!k) return <Modal title="KPI" onClose={onClose}>{error ? <><ErrorNote error={error} /><p className="muted">It may have been deleted, or it is not in your structure.</p></> : <Loading />}</Modal>;
-  const percent = k.mode === 'percent';
-  const dirty = status !== k.status || note.trim() !== '' || (percent ? Number(progress) !== k.pct : Number(value) !== k.current);
   const tryClose = () => { if (!dirty || window.confirm('You have changes that are not saved. Close without updating?')) onClose(); };
   const pickStatus = (s) => { setSaved(''); setStatus(s); if (percent && s === 'done') setProgress(100); if (percent && s === 'not_started') setProgress(0); };
   const setPct = (p) => { setSaved(''); const n = Math.max(0, Math.min(100, Number(p) || 0)); setProgress(p === '' ? '' : n); if (n === 100) setStatus('done'); else if (status === 'done') setStatus('in_progress'); else if (n > 0 && status === 'not_started') setStatus('in_progress'); };
@@ -164,7 +170,7 @@ function KpiView({ id, onClose }) {
             <div><dt>Assigned to</dt><dd className="with-avatar"><Avatar user={k.owner} size={22} />{k.owner.name}{k.owner.title ? `, ${k.owner.title}` : ''}</dd></div>
             <div><dt>{assigned ? 'Assigned by' : 'Set by'}</dt><dd>{k.createdBy?.name || 'Unknown'} on {fmtDate(k.createdAt)}</dd></div>
             <div><dt>Measured</dt><dd>{percent ? 'By percentage' : `From ${fmtVal(k.baseline, k.unit)} to a target of ${fmtVal(k.target, k.unit)}`}</dd></div>
-            <div><dt>Deadline</dt><dd>{k.dueDate ? fmtDate(k.dueDate) : 'None set'}</dd></div>
+            <div><dt>Deadline</dt><dd>{k.dueDate ? `${fmtDue(k.dueDate)}, end of the day` : 'None set'}</dd></div>
             {assigned && <div><dt>Opened by {k.owner.name.split(' ')[0]}</dt><dd>{k.unseen ? <Tag tone="warn">Not opened yet</Tag> : k.openedAt ? fmtDateTime(k.openedAt) : 'Yes'}</dd></div>}
             {k.completedAt && <div><dt>Finished</dt><dd>{fmtDate(k.completedAt)}</dd></div>}
           </dl>

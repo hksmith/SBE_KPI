@@ -211,3 +211,9 @@ h3.sub { margin: 22px 0 6px; font-size: 14px; color: var(--muted); font-family: 
 .count { font-style: normal; font-weight: 500; color: var(--muted); margin-left: 6px; }
 .title-list { display: flex; flex-wrap: wrap; gap: 4px 6px; }
 @media (max-width: 760px) { .facts { grid-template-columns: 1fr; } }
+
+/* live notification toast */
+.toast { position: fixed; right: 20px; bottom: 20px; z-index: 60; display: flex; align-items: center; gap: 12px; max-width: 420px; padding: 14px 14px 14px 18px; background: #fff; border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 12px 32px rgba(23, 43, 82, .18); animation: toast-in .25s ease-out; }
+.toast > div { display: grid; gap: 2px; min-width: 0; flex: 1; } .toast b { font-weight: 700; } .toast small { overflow: hidden; text-overflow: ellipsis; }
+@keyframes toast-in { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (max-width: 600px) { .toast { left: 12px; right: 12px; bottom: 12px; max-width: none; } }

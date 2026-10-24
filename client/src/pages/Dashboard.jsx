@@ -4,6 +4,7 @@ import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, X
 import { api, qs } from '../api.js';
 import { useAuth } from '../App.jsx';
 import { HEALTH, PRIORITIES, REPORT_STATUS, ROLES, fmtShort, fmtVal, isManager, weekLabel } from '../meta.js';
+const fmtDueShort = (d) => (d ? new Date(d).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: 'UTC' }) : '');
 import { Avatar, Empty, ErrorNote, HealthPill, Loading, ProgressBar, Ring, StatusLegend, StatusPill, StatusStrip, Tag, useLoad } from '../ui.jsx';
 
 const Stat = ({ label, value, sub, tone }) => <div className={'stat' + (tone ? ' stat-' + tone : '')}><span>{label}</span><b>{value}</b>{sub && <small>{sub}</small>}</div>;
@@ -63,7 +64,7 @@ export default function Dashboard() {
       <h2>Needs attention</h2>
       {d.attention.length ? <ul className="rows">{d.attention.map((a) => (
         <li key={a.id}>
-          <div><Link to={(kpiMode ? '/kpis?open=' : '/tasks?open=') + a.id}><b>{a.title}</b></Link><small>{solo ? '' : a.owner + ', '}{a.progress}% done, {a.dueDate ? (a.overdue ? 'was due ' : 'due ') + fmtShort(a.dueDate) : 'no deadline'}</small></div>
+          <div><Link to={(kpiMode ? '/kpis?open=' : '/tasks?open=') + a.id}><b>{a.title}</b></Link><small>{solo ? '' : a.owner + ', '}{a.progress}% done, {a.dueDate ? (a.overdue ? 'was due ' : 'due ') + fmtDueShort(a.dueDate) : 'no deadline'}</small></div>
           {a.overdue ? <Tag tone="bad">Past deadline</Tag> : <StatusPill status={a.status} />}
         </li>))}</ul> : <Empty title="All clear">Nothing is late, blocked or due this week.</Empty>}
     </section>
@@ -120,7 +121,7 @@ export default function Dashboard() {
       <div className="grid g-2-1">
         <section className="card">
           <h2>{kpiMode ? 'Where the KPIs stand' : 'Where the work stands'}</h2>
-          {t.total ? <><StatusStrip byStatus={t.byStatus} height={28} /><StatusLegend byStatus={t.byStatus} /></> : <Empty title={`No ${noun.toLowerCase()} yet`}>{kpiMode ? 'Add a KPI and it shows up here.' : 'Add a task and it shows up here.'}</Empty>}
+          {t.total ? <><StatusStrip byStatus={t.byStatus} height={28} /><StatusLegend byStatus={t.byStatus} /></> : <Empty title={kpiMode ? 'No KPIs yet' : 'No tasks yet'}>{kpiMode ? 'Add a KPI and it shows up here.' : 'Add a task and it shows up here.'}</Empty>}
         </section>
         {kpiMode ? paceCard : (
           <section className="card">

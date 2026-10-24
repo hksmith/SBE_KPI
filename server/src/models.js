@@ -75,6 +75,9 @@ const kpiSchema = new Schema({
   checkins: [{ value: Number, status: String, note: String, by: { type: oid, ref: 'User' }, at: { type: Date, default: Date.now } }],
 }, { timestamps: true });
 
+kpiSchema.index({ owner: 1, createdAt: -1 });
+kpiSchema.index({ owner: 1, updatedAt: -1 });
+
 const logSchema = new Schema({
   actor: { type: oid, ref: 'User', default: null },
   actorName: { type: String, default: '' },
@@ -156,11 +159,13 @@ const notificationSchema = new Schema({
   read: { type: Boolean, default: false },
   at: { type: Date, default: Date.now },
 });
+notificationSchema.index({ user: 1, at: -1 });
+notificationSchema.index({ user: 1, read: 1 });
 
 const settingSchema = new Schema({
   key: { type: String, unique: true }, orgName: { type: String, default: '' }, logo: { type: String, default: '' }, jobTitles: [String],
   modules: { tasks: { type: Boolean, default: false }, plans: { type: Boolean, default: false }, reports: { type: Boolean, default: false } }, // optional parts of the app; KPIs are always on
-});
+}, { timestamps: true });
 
 module.exports = {
   ROLES, TASK_STATUSES, PRIORITIES, FIELD_TYPES, PERIOD_TYPES, REPORT_STATUSES,

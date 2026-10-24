@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { Task, Plan, Kpi, TASK_STATUSES } = require('../models');
-const { fail, visibleIds, descendantsOf, weekStart, getSettings } = require('../lib');
+const { fail, visibleIds, descendantsOf, weekStart, getSettings, pastDue } = require('../lib');
 const { kpiHealth } = require('./kpis');
 const { planProgress } = require('./plans');
 
@@ -9,7 +9,7 @@ const addTask = (s, t, now) => {
   s.total++; s.byStatus[t.status]++;
   if (t.status === 'done') s.done++;
   if (t.status !== 'cancelled') { s.progressSum += t.progress; s.counted++; }
-  if (t.dueDate && t.dueDate < now && !['done', 'cancelled'].includes(t.status)) s.overdue++;
+  if (pastDue(t.dueDate, now) && !['done', 'cancelled'].includes(t.status)) s.overdue++;
 };
 const merge = (a, b) => { a.total += b.total; a.done += b.done; a.overdue += b.overdue; a.progressSum += b.progressSum; a.counted += b.counted; for (const k of TASK_STATUSES) a.byStatus[k] += b.byStatus[k]; return a; };
 const finish = (s) => ({ total: s.total, done: s.done, overdue: s.overdue, byStatus: s.byStatus, avgProgress: s.counted ? Math.round(s.progressSum / s.counted) : 0 });
@@ -35,7 +35,7 @@ router.get('/overview', async (req, res) => {
   const tasks = source === 'tasks' ? taskRows : kpis.map((k) => { const h = kpiHealth(k); return { _id: k._id, title: k.name, owner: k.owner, status: h.status, progress: h.pct, priority: k.priority || 'medium', dueDate: k.dueDate, completedAt: k.completedAt, createdAt: k.createdAt }; });
   // per person
   const own = new Map(setIds.map((id) => [id, emptyStats()]));
-  for (const t of tasks) addTask(own.get(String(t.owner)), t, now);
+  for (const t of tasks) { const s = own.get(String(t.owner)); if (s) addTask(s, t, now); }
   const planBy = new Map(plans.map((p) => [String(p.owner), p]));
   const kpiBy = new Map();
   const kpiOut = kpis.map((k) => ({ id: String(k._id), name: k.name, mode: k.mode || 'number', unit: k.unit, owner: String(k.owner), baseline: k.baseline, target: k.target, current: k.current, dueDate: k.dueDate, ...kpiHealth(k) }));
@@ -79,7 +79,7 @@ router.get('/overview', async (req, res) => {
   const soon = new Date(now.getTime() + 7 * 864e5);
   const attention = tasks.filter((t) => !['done', 'cancelled'].includes(t.status) && ((t.dueDate && t.dueDate < soon) || ['delayed', 'blocked'].includes(t.status)))
     .sort((a, b) => (a.dueDate || soon) - (b.dueDate || soon)).slice(0, 10)
-    .map((t) => ({ id: String(t._id), title: t.title, owner: org.byId.get(String(t.owner))?.name, status: t.status, progress: t.progress, dueDate: t.dueDate, overdue: !!t.dueDate && t.dueDate < now }));
+    .map((t) => ({ id: String(t._id), title: t.title, owner: org.byId.get(String(t.owner))?.name, status: t.status, progress: t.progress, dueDate: t.dueDate, overdue: pastDue(t.dueDate, now) }));
 
   const expected = people.filter((p) => !['admin', 'ceo'].includes(p.role)).length;
   res.json({

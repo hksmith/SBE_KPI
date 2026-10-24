@@ -97,6 +97,14 @@ async function audit(req, action, target = '', details = '', actor) {
   } catch (e) { console.error('audit log failed', e.message); }
 }
 
+/** A deadline picked as a date (stored as midnight UTC) lasts until the end of that day. */
+function dueEnd(d) {
+  if (!d) return null;
+  const t = new Date(d);
+  return t.getUTCHours() === 0 && t.getUTCMinutes() === 0 && t.getUTCSeconds() === 0 && t.getUTCMilliseconds() === 0 ? new Date(t.getTime() + 864e5 - 1) : t;
+}
+const pastDue = (d, now = new Date()) => !!d && dueEnd(d) < now;
+
 /** Monday (UTC) of the week containing `d`, as YYYY-MM-DD. */
 function weekStart(d = new Date()) {
   const x = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
@@ -159,4 +167,4 @@ async function getSettings() {
   return { orgName: s?.orgName || '', logo: s?.logo || '', jobTitles: s?.jobTitles || [], modules: { tasks: !!s?.modules?.tasks, plans: !!s?.modules?.plans, reports: !!s?.modules?.reports } };
 }
 
-module.exports = { cleanImage, getSettings, periodFor, recentPeriods, dueDateFor, chainAbove, notify, adminIds, JWT_SECRET, RANK, seesAll, HttpError, fail, signToken, requireAuth, requireRole, loadOrg, descendantsOf, visibleIds, manages, publicUser, tempPassword, checkPassword, isEmail, cleanUsername, freeUsername, escapeRegex, audit, weekStart, csv };
+module.exports = { dueEnd, pastDue, cleanImage, getSettings, periodFor, recentPeriods, dueDateFor, chainAbove, notify, adminIds, JWT_SECRET, RANK, seesAll, HttpError, fail, signToken, requireAuth, requireRole, loadOrg, descendantsOf, visibleIds, manages, publicUser, tempPassword, checkPassword, isEmail, cleanUsername, freeUsername, escapeRegex, audit, weekStart, csv };

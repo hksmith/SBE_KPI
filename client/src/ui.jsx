@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { useLiveTick } from './live.js';
 import { STATUS, STATUSES, HEALTH } from './meta.js';
 
 export const initials = (name = '') => name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0].toUpperCase()).join('');
@@ -61,7 +62,7 @@ export function Ring({ value, size = 132, stroke = 12, color = 'var(--blue)', ch
     <span className="ring" style={{ width: size, height: size }}>
       <svg width={size} height={size} role="img" aria-label={`${value}%`}>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--track)" strokeWidth={stroke} />
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={`${(Math.max(0, Math.min(100, value)) / 100) * c} ${c}`} transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+        {value > 0 && <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeDasharray={`${(Math.min(100, value) / 100) * c} ${c}`} transform={`rotate(-90 ${size / 2} ${size / 2})`} />}
       </svg>
       <span className="ring-label">{children}</span>
     </span>
@@ -96,15 +97,26 @@ export const ErrorNote = ({ error }) => error ? <p className="error" role="alert
 export const Empty = ({ title, children }) => <div className="empty"><strong>{title}</strong><p>{children}</p></div>;
 export const Loading = () => <div className="loading" aria-live="polite">Loading…</div>;
 
-/** Loads data and exposes reload + error state. */
-export function useLoad(fn, deps) {
+/**
+ * Loads data and exposes reload + error state.
+ * It reloads quietly (keeping what is on screen) whenever the live counter moves, so pages stay current without a refresh.
+ * Only the newest request may write the result, so a slow old answer can never overwrite a newer one.
+ */
+export function useLoad(fn, deps, { live = true } = {}) {
   const [state, setState] = useState({ data: null, error: '', loading: true });
-  const load = useCallback(() => {
-    setState((s) => ({ ...s, loading: true }));
-    return fn().then((data) => setState({ data, error: '', loading: false })).catch((e) => setState({ data: null, error: e.message, loading: false }));
+  const seq = useRef(0); const fnRef = useRef(fn); fnRef.current = fn;
+  const load = useCallback((quiet) => {
+    const n = ++seq.current;
+    if (!quiet) setState((s) => ({ ...s, loading: true }));
+    return fnRef.current()
+      .then((data) => { if (n === seq.current) setState({ data, error: '', loading: false }); })
+      .catch((e) => { if (n === seq.current) setState((s) => (quiet && s.data ? { ...s, loading: false } : { data: null, error: e.message, loading: false })); });
   }, deps); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [load]);
-  return { ...state, reload: load };
+  useEffect(() => { load(false); }, [load]);
+  const tick = useLiveTick();
+  useEffect(() => { if (tick && live) load(true); }, [tick]); // eslint-disable-line react-hooks/exhaustive-deps
+  const reload = useCallback(() => load(true), [load]);
+  return { ...state, reload };
 }
 
 /** Shows a one-time temporary password after an account is created or reset. */

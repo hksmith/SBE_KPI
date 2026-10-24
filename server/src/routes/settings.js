@@ -1,7 +1,7 @@
 // Organisation settings, departments and in-app notifications.
 const router = require('express').Router();
-const { Department, Setting, User, Template, Report, Notification, Kpi } = require('../models');
-const { fail, requireRole, audit, recentPeriods, dueDateFor, cleanImage, getSettings } = require('../lib');
+const { Department, Setting, User, Template, Report, Notification, Kpi, Task, Plan } = require('../models');
+const { fail, requireRole, audit, recentPeriods, dueDateFor, cleanImage, getSettings, visibleIds } = require('../lib');
 
 const admin = requireRole('admin');
 const deptOut = (d, counts) => ({ id: String(d._id), name: d.name, parent: d.parent ? String(d.parent) : null, head: d.head ? String(d.head) : null, jobTitles: d.jobTitles || [], people: counts?.get(d.name) || 0 });
@@ -66,15 +66,12 @@ router.delete('/departments/:id', admin, async (req, res) => {
   res.json({ ok: true });
 });
 
-// Stored notifications plus live deadline reminders for reports this person is expected to file
-router.get('/notifications', async (req, res) => {
-  const u = req.user; const now = new Date();
-  const [items, unread, newKpis, templates] = await Promise.all([
-    Notification.find({ user: u._id }).sort({ at: -1 }).limit(60).lean(), Notification.countDocuments({ user: u._id, read: false }), Kpi.countDocuments({ owner: u._id, unseen: true }),
-    Template.find({ active: true, requiredRoles: u.role }).lean(),
-  ]);
-  const reminders = []; const reportsOn = (await getSettings()).modules.reports;
-  for (const t of reportsOn ? templates : []) {
+/** Live deadline reminders for the reports this person is expected to file (only while the reports module is on). */
+async function remindersFor(u, reportsOn) {
+  if (!reportsOn) return [];
+  const now = new Date(); const reminders = [];
+  const templates = await Template.find({ active: true, requiredRoles: u.role }).lean();
+  for (const t of templates) {
     if (t.periodType === 'adhoc' || (t.departments.length && !t.departments.includes(u.department))) continue;
     for (const p of recentPeriods(t.periodType, 2)) {
       const due = dueDateFor(p.end, t.dueDays); const end = new Date(p.end + 'T23:59:59Z');
@@ -84,7 +81,44 @@ router.get('/notifications', async (req, res) => {
       reminders.push({ id: `${t._id}-${p.start}`, overdue: now > due, title: now > due ? `Overdue: ${t.name}, ${p.label}` : `Due soon: ${t.name}, ${p.label}`, dueDate: due, link: r ? '/reports/' + r._id : `/reports?new=${t._id}&period=${p.start}` });
     }
   }
+  return reminders;
+}
+
+// Stored notifications plus live deadline reminders for reports this person is expected to file
+router.get('/notifications', async (req, res) => {
+  const u = req.user;
+  const [items, unread, newKpis, settings] = await Promise.all([
+    Notification.find({ user: u._id }).sort({ at: -1 }).limit(60).lean(), Notification.countDocuments({ user: u._id, read: false }), Kpi.countDocuments({ owner: u._id, unseen: true }), getSettings(),
+  ]);
+  const reminders = await remindersFor(u, settings.modules.reports);
   res.json({ notifications: items.map((n) => ({ id: String(n._id), title: n.title, body: n.body, link: n.link, read: n.read, at: n.at })), unread, reminders, newKpis, count: unread + reminders.length });
+});
+
+/**
+ * Cheap "has anything changed?" check that every open page polls every few seconds.
+ * `stamp` changes whenever something this person can see changes; the page then reloads what it shows.
+ */
+const latest = (Model, filter, field = 'updatedAt') => Model.findOne(filter).sort({ [field]: -1 }).select(field).lean().then((d) => (d ? new Date(d[field]).getTime() : 0));
+router.get('/sync', async (req, res) => {
+  const u = req.user;
+  const [{ ids }, settings, setting] = await Promise.all([visibleIds(u), getSettings(), Setting.findOne({ key: 'org' }).select('updatedAt').lean()]);
+  const mine = { owner: { $in: ids } };
+  const m = settings.modules;
+  const parts = await Promise.all([
+    latest(Kpi, mine), Kpi.countDocuments(mine),
+    latest(Notification, { user: u._id }, 'at'), Notification.countDocuments({ user: u._id, read: false }), Kpi.countDocuments({ owner: u._id, unseen: true }),
+    latest(User, {}), User.countDocuments({}), latest(Department, {}), Department.countDocuments({}),
+    m.tasks ? latest(Task, mine) : 0, m.tasks ? Task.countDocuments(mine) : 0,
+    m.plans ? latest(Plan, mine) : 0,
+    m.reports ? latest(Report, { $or: [{ author: { $in: ids } }, { reviewer: u._id }] }) : 0,
+  ]);
+  const reminders = await remindersFor(u, m.reports);
+  const unread = parts[3], newKpis = parts[4];
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    stamp: [setting?.updatedAt ? new Date(setting.updatedAt).getTime() : 0, JSON.stringify(m), ...parts, reminders.length, u.updatedAt ? new Date(u.updatedAt).getTime() : 0].join('.'),
+    unread, newKpis, count: unread + reminders.length,
+  });
 });
 router.post('/notifications/read', async (req, res) => {
   const filter = { user: req.user._id, read: false }; if (req.body?.id) filter._id = req.body.id;
