@@ -23,7 +23,7 @@ async function request(method, path, body) {
   return data;
 }
 export const api = {
-  get: (p) => request('GET', p), post: (p, b) => request('POST', p, b || {}), patch: (p, b) => request('PATCH', p, b), del: (p) => request('DELETE', p),
+  get: (p) => request('GET', p), post: (p, b) => request('POST', p, b || {}), patch: (p, b) => request('PATCH', p, b), del: (p, b) => request('DELETE', p, b),
   /** Send one file as the raw request body. */
   async upload(path, file) {
     let res;

@@ -217,3 +217,8 @@ h3.sub { margin: 22px 0 6px; font-size: 14px; color: var(--muted); font-family: 
 .toast > div { display: grid; gap: 2px; min-width: 0; flex: 1; } .toast b { font-weight: 700; } .toast small { overflow: hidden; text-overflow: ellipsis; }
 @keyframes toast-in { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
 @media (max-width: 600px) { .toast { left: 12px; right: 12px; bottom: 12px; max-width: none; } }
+
+/* deleting an account */
+.btn-quiet.danger { color: var(--bad); } .btn-quiet.danger:hover { background: #fbeaea; }
+.btn-danger-solid { background: var(--bad); border-color: var(--bad); color: #fff; } .btn-danger-solid:hover { background: #b52f2f; }
+.delete-list { margin: 0 0 12px; padding-left: 20px; display: grid; gap: 6px; }

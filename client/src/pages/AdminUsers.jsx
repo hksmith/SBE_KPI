@@ -70,7 +70,7 @@ export default function AdminUsers() {
               <td>{u.department || <span className="muted">none</span>}</td>
               <td>{u.lastLoginAt ? fmtDateTime(u.lastLoginAt) : <span className="muted">never</span>}</td>
               <td>{u.status === 'active' ? <Tag tone="good">Active</Tag> : <Tag tone="bad">Disabled</Tag>}</td>
-              <td className="row-actions"><button className="btn btn-quiet" onClick={() => setModal({ type: 'edit', user: u })}>Edit</button>{u.id !== me.id && <button className="btn btn-quiet" onClick={() => reset(u)}>Reset password</button>}</td>
+              <td className="row-actions"><button className="btn btn-quiet" onClick={() => setModal({ type: 'edit', user: u })}>Edit</button>{u.id !== me.id && <><button className="btn btn-quiet" onClick={() => reset(u)}>Reset password</button><button className="btn btn-quiet danger" onClick={() => setModal({ type: 'delete', user: u })}>Delete</button></>}</td>
             </tr>))}
           </tbody>
         </table></div>
@@ -78,6 +78,7 @@ export default function AdminUsers() {
       {modal?.type === 'new' && <NewUser users={users} departments={departments} titles={titles} onClose={() => setModal(null)} onDone={done} />}
       {modal?.type === 'approve' && <Approve user={modal.user} users={users} departments={departments} onClose={() => setModal(null)} onDone={done} />}
       {modal?.type === 'edit' && <EditUser user={modal.user} users={users} departments={departments} titles={titles} isSelf={modal.user.id === me.id} onClose={() => setModal(null)} onDone={done} />}
+      {modal?.type === 'delete' && <DeleteUser user={modal.user} onClose={() => setModal(null)} onDone={done} />}
       {temp && <TempPassword info={temp} onClose={() => setTemp(null)} />}
     </div>
   );
@@ -160,6 +161,32 @@ function EditUser({ user, users, departments, titles, isSelf, onClose, onDone })
         <ErrorNote error={error} />
         <div className="actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn btn-primary">Save changes</button></div>
       </form>
+    </Modal>
+  );
+}
+
+/** Permanent removal. Shows exactly what goes with the account and asks for the username before deleting. */
+function DeleteUser({ user, onClose, onDone }) {
+  const [info, setInfo] = useState(null); const [error, setError] = useState(''); const [typed, setTyped] = useState(''); const [busy, setBusy] = useState(false);
+  React.useEffect(() => { api.get(`/users/${user.id}/delete-check`).then(setInfo).catch((e) => setError(e.message)); }, [user.id]);
+  const n = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+  const ok = info && typed.trim().toLowerCase() === (info.username || '').toLowerCase();
+  const submit = async (e) => { e.preventDefault(); if (!ok) return; setBusy(true); setError(''); try { await api.del('/users/' + user.id, { confirm: typed }); onDone(); } catch (err) { setError(err.message); setBusy(false); } };
+  return (
+    <Modal title={'Delete ' + user.name} onClose={onClose}>
+      {!info ? (error ? <><ErrorNote error={error} /><div className="actions"><button className="btn" onClick={onClose}>Close</button></div></> : <Loading />) : (
+        <form onSubmit={submit}>
+          <p>This permanently deletes <b>{info.name}</b> (@{info.username}). It cannot be undone.</p>
+          <ul className="delete-list">
+            <li>{n(info.kpis, 'KPI', 'KPIs')} they own{info.tasks ? `, ${n(info.tasks, 'task', 'tasks')}` : ''}{info.plans ? `, ${n(info.plans, 'weekly plan', 'weekly plans')}` : ''}{info.reports ? `, ${n(info.reports, 'report', 'reports')}` : ''} and their notifications are deleted.</li>
+            {info.directReports.length > 0 && <li>{n(info.directReports.length, 'person reports', 'people report')} to them ({info.directReports.slice(0, 4).join(', ')}{info.directReports.length > 4 ? '…' : ''}). They will report to <b>{info.newManager || 'nobody (top of the structure)'}</b> instead.</li>}
+            <li>KPIs they set for other people stay with those people. The activity log keeps a record of the deletion.</li>
+          </ul>
+          <p className="muted small">If you only want to stop them signing in and keep their history, use Edit and set the account to Disabled instead.</p>
+          <Field label={`Type ${info.username} to confirm`}><input autoFocus autoCapitalize="none" spellCheck={false} value={typed} onChange={(e) => setTyped(e.target.value)} /></Field>
+          <ErrorNote error={error} />
+          <div className="actions"><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn btn-danger-solid" disabled={!ok || busy}>{busy ? 'Deleting…' : 'Delete permanently'}</button></div>
+        </form>)}
     </Modal>
   );
 }

@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
-const { User, ROLES } = require('../models');
+const { User, ROLES, Kpi, Task, Plan, Report, Attachment, Notification, Department } = require('../models');
 const { RANK, fail, requireRole, loadOrg, visibleIds, manages, publicUser, tempPassword, checkPassword, isEmail, cleanUsername, freeUsername, audit, cleanImage } = require('../lib');
 
 const admin = requireRole('admin');
@@ -132,6 +132,42 @@ router.patch('/:id', admin, async (req, res) => {
   await user.save();
   await audit(req, newStatus === 'disabled' && changes.some((c) => c.startsWith('status')) ? 'user.disabled' : 'user.updated', user.email, changes.join(', '));
   res.json({ user: publicUser(user) });
+});
+
+// ---- deleting an account (admin only) --------------------------------------------------------
+// What will go with the account, shown in the confirmation before anything is deleted.
+async function deletionCheck(req, id) {
+  const user = await User.findById(id).catch(() => null);
+  if (!user) fail(404, 'Account not found.');
+  if (String(user._id) === String(req.user._id)) fail(400, 'You cannot delete your own account.');
+  if (user.role === 'admin' && user.status === 'active' && (await activeAdminCount()) <= 1) fail(400, 'There must be at least one active admin.');
+  const [kpis, tasks, plans, reports, directReports, manager] = await Promise.all([
+    Kpi.countDocuments({ owner: user._id }), Task.countDocuments({ owner: user._id }), Plan.countDocuments({ owner: user._id }), Report.countDocuments({ author: user._id }),
+    User.find({ managerId: user._id }).select('name').lean(), user.managerId ? User.findById(user.managerId).select('name').lean() : null,
+  ]);
+  return { user, kpis, tasks, plans, reports, directReports: directReports.map((r) => r.name), newManager: manager ? manager.name : null };
+}
+router.get('/:id/delete-check', admin, async (req, res) => {
+  const { user, ...rest } = await deletionCheck(req, req.params.id);
+  res.json({ name: user.name, username: user.username, ...rest });
+});
+// Removes the person and their own KPIs, tasks, plans, reports and notifications.
+// People who reported to them move up to their manager. KPIs they set for others stay with those people.
+router.delete('/:id', admin, async (req, res) => {
+  const { user, kpis, tasks, plans, reports, directReports, newManager } = await deletionCheck(req, req.params.id);
+  if (String(req.body?.confirm || '').toLowerCase().trim() !== String(user.username || '').toLowerCase()) fail(400, `Type the username ${user.username} to confirm.`);
+  const id = user._id;
+  const theirReports = (await Report.find({ author: id }).select('_id').lean()).map((r) => r._id);
+  await User.updateMany({ managerId: id }, { managerId: user.managerId || null });
+  await Promise.all([
+    Kpi.deleteMany({ owner: id }), Task.deleteMany({ owner: id }), Plan.deleteMany({ owner: id }), Notification.deleteMany({ user: id }),
+    Attachment.deleteMany({ report: { $in: theirReports } }), Report.deleteMany({ _id: { $in: theirReports } }),
+    Report.updateMany({ reviewer: id }, { reviewer: null }), Department.updateMany({ head: id }, { head: null }),
+  ]);
+  await User.deleteOne({ _id: id });
+  const moved = directReports.length ? `; ${directReports.length} direct report(s) moved to ${newManager || 'the top of the structure'}` : '';
+  await audit(req, 'user.deleted', user.email, `${user.name} (@${user.username}), ${user.role}: removed ${kpis} KPIs, ${tasks} tasks, ${plans} plans, ${reports} reports${moved}`);
+  res.json({ ok: true });
 });
 
 // Admin can reset anyone; a director can reset the team leaders and members under them.
